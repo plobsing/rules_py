@@ -8,7 +8,7 @@ use sha256::try_digest;
 use std::{
     env::current_dir,
     fs::{self, File},
-    io::{BufRead, BufReader, BufWriter, Write},
+    io::{self, BufRead, BufReader, BufWriter, Write},
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
 };
@@ -619,11 +619,20 @@ pub fn create_tree(
 
             // In the case of copying bin entries, we need to patch them. Yay.
             if link_dir.file_name() == Some(OsStr::new("bin")) {
-                let mut content = fs::read_to_string(original_entry).into_diagnostic()?;
-                if content.starts_with("#!/dev/null") {
-                    content.replace_range(..0, &RELOCATABLE_SHEBANG);
+                match fs::read_to_string(original_entry.clone()) {
+                    Ok(mut content) => {
+                        if content.starts_with("#!/dev/null") {
+                            content.replace_range(..0, &RELOCATABLE_SHEBANG);
+                        }
+                        fs::write(&link_entry, content).into_diagnostic()?;
+                    }
+                    Err(error) => match error.kind() {
+                        // Binaries are usually invalid as UTF-8 but also don't have shebangs that
+                        // need replacing.
+                        io::ErrorKind::InvalidData => copy(&original_entry, &link_entry)?,
+                        _ => Err(error).into_diagnostic()?,
+                    }
                 }
-                fs::write(&link_entry, content).into_diagnostic()?;
             }
             // Normal case of needing to link a file :smile:
             else {
